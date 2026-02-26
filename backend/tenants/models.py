@@ -20,15 +20,16 @@ class Tenant(models.Model):
 
 		This is a stub implementation; a real project would calculate the
 		balance from transactions or a billing ledger.  For now we return
-		``0`` so that the USSD flow can complete without error.
+		a fixed amount so that the USSD flow can complete without error.
 		"""
 
-		return 0
+		return "Ksh 15,000"
 
 
 class Property(models.Model):
 	name = models.CharField(max_length=100)
 	tenants = models.ManyToManyField(Tenant, related_name="properties")
+	rooms = models.TextField(default="", help_text="Comma-separated list of room numbers")
 
 	def __str__(self):
 		return self.name
@@ -37,14 +38,16 @@ class Property(models.Model):
 		"""Return the set of room identifiers associated with ``tenant``.
 
 		The USSD view simply checks membership in this collection when the
-		user types a room number.  A fully‑featured implementation would
-		probably have a separate ``Room`` model or similar; for the sake of
-		getting the server running we return an empty list, meaning no
-		rooms are recognised.  You can later extend this method or add a
-		proper relationship if needed.
+		user types a room number.  Rooms are stored as a comma-separated list.
 		"""
-
-		return []
+		if not self.rooms:
+			return []
+		return [room.strip() for room in self.rooms.split(',')]
+	
+	def set_rooms(self, room_list):
+		"""Set rooms from a list of room identifiers."""
+		self.rooms = ','.join(str(room).strip() for room in room_list)
+		self.save()
 
 
 class MaintenanceRequest(models.Model):

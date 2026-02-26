@@ -59,25 +59,17 @@ def ussd(request):
     # validation/formatting logic (e.g. using ``phonenumbers``).
     if phone_number:
         phone_number = phone_number.strip()
+        # If urlencoded ``+`` became a space, reinstate it before lookup
+        # (e.g., " 254700000000" becomes "+254700000000")
         if phone_number.startswith(" ") and phone_number[1:].isdigit():
             phone_number = "+" + phone_number.lstrip()
-        # convert common local prefix
-        if phone_number.startswith("0") and phone_number[1:].isdigit():
+        # convert common local prefix (0707274525 -> +254707274525)
+        elif phone_number.startswith("0") and phone_number[1:].isdigit():
             # assume Kenyan number; translate 0xxxx -> +2540xxxx
             phone_number = "+254" + phone_number[1:]
-
-    # normalise the number; the AT simulator (and many USSD gateways)
-    # send the payload using ``application/x-www-form-urlencoded``.  In a
-    # URL the ``+`` character is interpreted as a space unless it is
-    # percent-encoded, so we frequently see incoming values like
-    # ``" 254700000000"`` when the real number is ``+254700000000``.  To
-    # make our lookups more forgiving we strip whitespace and, if the
-    # number begins with a space followed by digits, re‑prefix a ``+``.
-    if phone_number:
-        phone_number = phone_number.strip()
-        # If urlencoded ``+`` became a space, reinstate it before lookup
-        if phone_number.startswith(" ") and phone_number[1:].isdigit():
-            phone_number = "+" + phone_number.lstrip()
+        # if number starts with 254 (no +), add the + prefix
+        elif phone_number.startswith("254") and phone_number[3:].isdigit():
+            phone_number = "+" + phone_number
     # Note: leaving ``phone_number`` as ``None`` when the parameter was
     # completely missing allows us to report a more helpful error later.
     text = (data.get("text") or "").strip()
@@ -218,10 +210,25 @@ def ussd(request):
                         description=issue_description
                     )
                     response = "END Maintenance request submitted successfully!"
-                    send_sms(phone_number,
-                             f"Dear {tenant.name}, your maintenance request has been received:\n"
-                             f"Property: {property_obj.name}\nRoom: {room_number}\nIssue: {issue_description}\n"
-                             "Reply with additional details if needed.")
+                    # Construct confirmation SMS
+                    # TODO fetch tenant name from DB later.
+                    tenant_name = tenant.name or "Tenant"
+                    sms_message = (
+                        f"Dear {tenant_name},\n\n"
+                        "Maintenance Request Received.\n\n"
+                        f"Property: {property_obj.name}\n"
+                        f"Unit: {room_number}\n\n"
+                        "Issue:\n"
+                        f"{issue_description}\n\n"
+                        "Our team will contact you shortly.\n\n"
+                        "— Renti"
+                    )
+                    # send SMS but do not block the USSD response
+                    try:
+                        send_sms(phone_number, sms_message)
+                        logger.info("Maintenance SMS sent to %s", phone_number)
+                    except Exception:
+                        logger.exception("Failed to send maintenance SMS to %s", phone_number)
                 except ObjectDoesNotExist:
                     response = "END Sorry, you are not registered for this room."
                     send_sms(phone_number,
