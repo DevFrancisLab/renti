@@ -18,10 +18,48 @@ from dotenv import load_dotenv
 # Load .env file
 load_dotenv()
 
-AFRICAS_TALKING_USERNAME = os.getenv("AFRICAS_TALKING_USERNAME")
-AFRICAS_TALKING_API_KEY = os.getenv("AFRICAS_TALKING_API_KEY")
-AFRICAS_TALKING_SHORTCODE = os.getenv("AFRICAS_TALKING_SHORTCODE")
-AFRICAS_TALKING_CALLBACK_URL = os.getenv("AFRICAS_TALKING_CALLBACK_URL")
+# Africa's Talking credentials and configuration.  ``SHORTCODE`` was being
+# overloaded in the .env file; the value actually corresponds to the USSD
+# service code (e.g. ``*123#``).  Reserve ``SERVICE_CODE`` for that purpose
+# and introduce a separate variable for the SMS sender ID.
+# Africa's Talking configuration.  We support separate sandbox and
+# production credentials; production variables have the plain name while
+# sandbox values are suffixed with ``_SANDBOX``.  During development the
+# sandbox keys are usually populated, and the code will transparently
+# fall back to them if no live value is available.  When deploying to a
+# live environment you can set the non-sandbox variables to your real
+# credentials and omit the suffix entirely.
+
+# credentials
+AFRICAS_TALKING_USERNAME = (
+    os.getenv("AFRICAS_TALKING_USERNAME")
+    or os.getenv("AFRICAS_TALKING_USERNAME_SANDBOX")
+)
+AFRICAS_TALKING_API_KEY = (
+    os.getenv("AFRICAS_TALKING_API_KEY")
+    or os.getenv("AFRICAS_TALKING_API_KEY_SANDBOX")
+)
+
+# service code used by the USSD gateway to identify this application
+AFRICAS_TALKING_SERVICE_CODE = (
+    os.getenv("AFRICAS_TALKING_SERVICE_CODE")
+    or os.getenv("AFRICAS_TALKING_SERVICE_CODE_SANDBOX")
+)
+
+# shortcode/sender ID to use when sending SMS messages via the AT SMS
+# service.  The sandbox value may differ from your production sender.
+AFRICAS_TALKING_SMS_SHORTCODE = (
+    os.getenv("AFRICAS_TALKING_SMS_SHORTCODE")
+    or os.getenv("AFRICAS_TALKING_SMS_SHORTCODE_SANDBOX")
+)
+
+# callback URL used by AT to notify us of USSD sessions; often set
+# automatically by the sandbox dashboard and normally the same value for
+# both environments but we allow overriding individually.
+AFRICAS_TALKING_CALLBACK_URL = (
+    os.getenv("AFRICAS_TALKING_CALLBACK_URL")
+    or os.getenv("AFRICAS_TALKING_CALLBACK_URL_SANDBOX")
+)
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent

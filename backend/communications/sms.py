@@ -70,7 +70,11 @@ def send_sms(to: str, message: str) -> object | None:
 
     try:
         sms = _get_client()
-        sender = getattr(settings, "AFRICAS_TALKING_SHORTCODE", None)
+        # prefer the new SMS-specific variable, but fall back to the legacy
+        # name if it exists so existing .env files don't break immediately.
+        sender = getattr(settings, "AFRICAS_TALKING_SMS_SHORTCODE", None)
+        if sender is None:
+            sender = getattr(settings, "AFRICAS_TALKING_SHORTCODE", None)
         # `sender` is optional; if not provided the default from the AT
         # dashboard will be used.
         return sms.send(message, [to], sender_id=sender)

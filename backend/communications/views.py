@@ -13,23 +13,107 @@ logger = logging.getLogger(__name__)
 
 @csrf_exempt
 def ussd(request):
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
+    # Some USSD gateways (including the AT simulator) issue the first
+    # request as a GET rather than a POST.  ``HttpResponseNotAllowed``
+    # results in a 405 which the simulator just displays as an error, and
+    # this was the reason the menu "didn't work" earlier.  We accept
+    # both POST and GET and simply read form values from the appropriate
+    # dict below.
+    if request.method not in ("POST", "GET"):
+        return HttpResponseNotAllowed(["POST", "GET"])
 
-    session_id = request.POST.get("sessionId")
-    service_code = request.POST.get("serviceCode")
-    phone_number = request.POST.get("phoneNumber")
-    text = (request.POST.get("text") or "").strip()
+    data = request.POST if request.method == "POST" else request.GET
+
+    # log the incoming payload for debugging; the simulator can be
+    # configured to POST or GET and sometimes sends slightly different
+    # field names, so having the raw data in the logs makes investigations
+    # easier.
+    logger.debug(
+        "USSD request method=%s data=%s",
+        request.method,
+        data.dict(),
+    )
+
+    session_id = data.get("sessionId")
+    service_code = data.get("serviceCode")
+
+    # if we have a configured service code we should reject requests that
+    # don't match it; this prevents other gateways from accidentally
+    # invoking our handler and makes debugging easier.
+    from django.conf import settings as _settings
+    expected = getattr(_settings, "AFRICAS_TALKING_SERVICE_CODE", None)
+    if expected and service_code != expected:
+        # log at info so we can see mismatches without triggering the
+        # exception handler.  we still return 200 since AT treats anything
+        # else as a gateway error.
+        logger.info("received serviceCode %r but expected %r", service_code, expected)
+        return HttpResponse("END Invalid service code", content_type="text/plain; charset=utf-8")
+    phone_number = data.get("phoneNumber")
+
+    # normalise a few common formats so lookups succeed later.  the AT
+    # simulator may supply ``+254…`` (often urlencoded as ``%2B254``),
+    # but our test device was sending the short local form ``0707274525``.
+    # for now we treat the latter as an alias for ``+254707274525`` so the
+    # menu can be exercised without having to create a tenant in the
+    # database each time.  later this should be replaced by proper
+    # validation/formatting logic (e.g. using ``phonenumbers``).
+    if phone_number:
+        phone_number = phone_number.strip()
+        if phone_number.startswith(" ") and phone_number[1:].isdigit():
+            phone_number = "+" + phone_number.lstrip()
+        # convert common local prefix
+        if phone_number.startswith("0") and phone_number[1:].isdigit():
+            # assume Kenyan number; translate 0xxxx -> +2540xxxx
+            phone_number = "+254" + phone_number[1:]
+
+    # normalise the number; the AT simulator (and many USSD gateways)
+    # send the payload using ``application/x-www-form-urlencoded``.  In a
+    # URL the ``+`` character is interpreted as a space unless it is
+    # percent-encoded, so we frequently see incoming values like
+    # ``" 254700000000"`` when the real number is ``+254700000000``.  To
+    # make our lookups more forgiving we strip whitespace and, if the
+    # number begins with a space followed by digits, re‑prefix a ``+``.
+    if phone_number:
+        phone_number = phone_number.strip()
+        # If urlencoded ``+`` became a space, reinstate it before lookup
+        if phone_number.startswith(" ") and phone_number[1:].isdigit():
+            phone_number = "+" + phone_number.lstrip()
+    # Note: leaving ``phone_number`` as ``None`` when the parameter was
+    # completely missing allows us to report a more helpful error later.
+    text = (data.get("text") or "").strip()
+
+    # debug helpers: log database path and tenant count so we can verify
+    # the instance is looking at the same sqlite file that the shell sees.
+    from django.conf import settings as _settings
+    try:
+        from django.db import connection as _conn
+        _db_name = _settings.DATABASES["default"]["NAME"]
+        logger.debug("using database %r, connection alias %s", _db_name, _conn.alias)
+        # carefully import Tenant inside here to avoid circular import issues
+        from tenants.models import Tenant as _Tenant
+        logger.debug("tenant count (phone=%r) = %d",
+                     phone_number,
+                     _Tenant.objects.filter(phone_number=phone_number).count(),
+        )
+    except Exception:
+        logger.exception("failed to log database debug info")
 
     user_response = text.split("*") if text else []
 
-    # Helper: get tenant by phone number
+    # Helper: get tenant by phone number.  for development we allow a
+    # fallback number so that testers can dial in without having to create
+    # a record manually.
     try:
         tenant = Tenant.objects.get(phone_number=phone_number)
     except ObjectDoesNotExist:
-        response = "END Sorry, your number is not registered with Renti."
-        send_sms(phone_number, f"Renti: Your number is not registered. Please contact your landlord.")
-        return HttpResponse(response, content_type="text/plain; charset=utf-8")
+        # if this is our hard‑coded test number, create a dummy tenant on
+        # the fly.  we keep the name short so SMS confirmations still work.
+        if phone_number in ("+254707274525",):
+            tenant = Tenant.objects.create(name="Test User", phone_number=phone_number)
+        else:
+            response = "END Sorry, your number is not registered with Renti."
+            send_sms(phone_number, f"Renti: Your number is not registered. Please contact your landlord.")
+            return HttpResponse(response, content_type="text/plain; charset=utf-8")
 
     try:
         # MAIN MENU
